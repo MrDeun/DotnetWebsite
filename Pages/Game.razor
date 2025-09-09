@@ -1,0 +1,926 @@
+@page "/game"
+@using Microsoft.AspNetCore.SignalR.Client
+@using BattleshipsGame.Models
+@inject IJSRuntime JSRuntime
+@inject HttpClient Http
+@implements IAsyncDisposable
+
+<div class="game-container">
+    <div class="game-header">
+        <h1>Battleships Online</h1>
+        <div class="connection-status @(IsConnected ? "connected" : "disconnected")">
+            @(IsConnected ? "Connected" : "Disconnected")
+        </div>
+    </div>
+
+    @if (currentGame == null)
+    {
+        <div class="lobby">
+            <div class="player-input">
+                <input @bind="playerName" placeholder="Enter your name" class="form-input" />
+                <button @onclick="JoinMatchmaking" disabled="@(!IsConnected || isSearching)" class="btn-primary">
+                    @(isSearching ? "Searching..." : "Find Game")
+                </button>
+            </div>
+            
+            @if (isSearching)
+            {
+                <div class="searching-indicator">
+                    <div class="spinner"></div>
+                    <p>Searching for opponent...</p>
+                </div>
+            }
+
+            <!-- AJAX Statistics Display -->
+            <div class="statistics-panel">
+                <h3>Game Statistics</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Active Games:</span>
+                        <span class="stat-value">@gameStats.ActiveGames</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Players Online:</span>
+                        <span class="stat-value">@gameStats.PlayersOnline</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Games Played Today:</span>
+                        <span class="stat-value">@gameStats.GamesToday</span>
+                    </div>
+                </div>
+                <button @onclick="RefreshStats" class="btn-secondary">Refresh Stats</button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="game-area">
+            <div class="game-info">
+                <div class="player-info">
+                    <h3>@currentGame.Player1?.Name vs @currentGame.Player2?.Name</h3>
+                    <p>Game State: <span class="game-state">@currentGame.State</span></p>
+                    @if (currentGame.State == GameState.Playing)
+                    {
+                        <p>Current Turn: <span class="current-turn">@GetCurrentPlayerName()</span></p>
+                    }
+                </div>
+                
+                <div class="score-board">
+                    <div class="score-item">
+                        <span>Your Hits: @myStats.ShotsHit/@myStats.ShotsFired</span>
+                    </div>
+                    <div class="score-item">
+                        <span>Ships Sunk: @myStats.ShipsSunk</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="boards-container">
+                <div class="board-section">
+                    <h4>Your Board</h4>
+                    <div class="board player-board">
+                        @for (int row = 0; row < 10; row++)
+                        {
+                            <div class="board-row">
+                                @for (int col = 0; col < 10; col++)
+                                {
+                                    var r = row;
+                                    var c = col;
+                                    var cellState = GetPlayerCellState(r, c);
+                                    
+                                    <div class="cell @GetCellClass(cellState, true)" 
+                                         @onclick="() => HandlePlayerBoardClick(r, c)">
+                                        <span class="cell-content">@GetCellContent(cellState, true)</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <div class="board-section">
+                    <h4>Enemy Board</h4>
+                    <div class="board enemy-board">
+                        @for (int row = 0; row < 10; row++)
+                        {
+                            <div class="board-row">
+                                @for (int col = 0; col < 10; col++)
+                                {
+                                    var r = row;
+                                    var c = col;
+                                    var cellState = GetEnemyCellState(r, c);
+                                    
+                                    <div class="cell @GetCellClass(cellState, false)" 
+                                         @onclick="() => HandleEnemyBoardClick(r, c)">
+                                        <span class="cell-content">@GetCellContent(cellState, false)</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+            @if (currentGame.State == GameState.PlacingShips)
+            {
+                <div class="ship-placement">
+                    <h4>Place Your Ships</h4>
+                    <div class="ships-to-place">
+                        @foreach (var ship in shipsToPlace.Where(s => !s.IsPlaced))
+                        {
+                            <div class="ship-item @(selectedShip?.Name == ship.Name ? "selected" : "")" 
+                                 @onclick="() => SelectShip(ship)">
+                                <span>@ship.Name (@ship.Size cells)</span>
+                            </div>
+                        }
+                    </div>
+                    
+                    @if (selectedShip != null)
+                    {
+                        <div class="placement-controls">
+                            <button @onclick="ToggleShipOrientation" class="btn-secondary">
+                                Rotate (@(isVerticalPlacement ? "Vertical" : "Horizontal"))
+                            </button>
+                        </div>
+                    }
+                    
+                    @if (shipsToPlace.All(s => s.IsPlaced))
+                    {
+                        <button @onclick="ConfirmShipPlacement" class="btn-primary">Ready to Play!</button>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <!-- Messages and Notifications -->
+    <div class="messages-container">
+        @foreach (var message in gameMessages.TakeLast(5))
+        {
+            <div class="message @message.Type">
+                <span class="timestamp">[@message.Timestamp.ToString("HH:mm:ss")]</span>
+                <span class="content">@message.Content</span>
+            </div>
+        }
+    </div>
+</div>
+
+<style>
+    /* Responsive CSS */
+    .game-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1rem;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .game-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        padding: 1rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 8px;
+    }
+
+    .connection-status {
+        padding: 0.5rem 1rem;
+        border-radius: 4px;
+        font-weight: bold;
+    }
+
+    .connected { background-color: #28a745; }
+    .disconnected { background-color: #dc3545; }
+
+    .lobby {
+        text-align: center;
+        padding: 2rem;
+    }
+
+    .player-input {
+        margin-bottom: 2rem;
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .form-input {
+        padding: 0.75rem;
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        font-size: 1rem;
+        min-width: 200px;
+    }
+
+    .btn-primary, .btn-secondary {
+        padding: 0.75rem 1.5rem;
+        border: none;
+        border-radius: 4px;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .btn-primary {
+        background-color: #007bff;
+        color: white;
+    }
+
+    .btn-primary:hover { background-color: #0056b3; }
+    .btn-primary:disabled { background-color: #6c757d; cursor: not-allowed; }
+
+    .btn-secondary {
+        background-color: #6c757d;
+        color: white;
+    }
+
+    .btn-secondary:hover { background-color: #545b62; }
+
+    .searching-indicator {
+        margin: 2rem 0;
+    }
+
+    .spinner {
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        animation: spin 2s linear infinite;
+        margin: 0 auto 1rem;
+    }
+
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    .statistics-panel {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-top: 2rem;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .stats-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+
+    .stat-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.5rem;
+        background: white;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .stat-label { font-weight: bold; }
+    .stat-value { color: #007bff; font-weight: bold; }
+
+    .game-area {
+        padding: 1rem;
+    }
+
+    .game-info {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 2rem;
+        padding: 1rem;
+        background: #f8f9fa;
+        border-radius: 8px;
+    }
+
+    .score-board {
+        display: flex;
+        gap: 2rem;
+    }
+
+    .score-item {
+        padding: 0.5rem 1rem;
+        background: white;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .boards-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2rem;
+        margin-bottom: 2rem;
+    }
+
+    .board-section h4 {
+        text-align: center;
+        margin-bottom: 1rem;
+        color: #495057;
+    }
+
+    .board {
+        display: grid;
+        grid-template-rows: repeat(10, 1fr);
+        gap: 1px;
+        background: #333;
+        padding: 1px;
+        border-radius: 4px;
+        max-width: 400px;
+        margin: 0 auto;
+    }
+
+    .board-row {
+        display: grid;
+        grid-template-columns: repeat(10, 1fr);
+        gap: 1px;
+    }
+
+    .cell {
+        aspect-ratio: 1;
+        background: #87ceeb;
+        border: 1px solid #4682b4;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+
+    .cell:hover {
+        transform: scale(1.1);
+        z-index: 10;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    }
+
+    .cell.water { background: #87ceeb; }
+    .cell.ship { background: #696969; }
+    .cell.hit { background: #ff6347; }
+    .cell.miss { background: #ffffff; }
+    .cell.sunk { background: #8b0000; }
+
+    .cell-content {
+        color: white;
+        text-shadow: 1px 1px 2px rgba(0,0,0,0.7);
+    }
+
+    .ship-placement {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-top: 2rem;
+    }
+
+    .ships-to-place {
+        display: flex;
+        gap: 1rem;
+        margin: 1rem 0;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+
+    .ship-item {
+        padding: 0.75rem 1rem;
+        background: white;
+        border: 2px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+
+    .ship-item:hover {
+        background: #e9ecef;
+        transform: translateY(-2px);
+    }
+
+    .ship-item.selected {
+        border-color: #007bff;
+        background: #e3f2fd;
+    }
+
+    .placement-controls {
+        text-align: center;
+        margin: 1rem 0;
+    }
+
+    .messages-container {
+        position: fixed;
+        bottom: 1rem;
+        right: 1rem;
+        width: 300px;
+        z-index: 1000;
+    }
+
+    .message {
+        background: white;
+        border-left: 4px solid #007bff;
+        padding: 0.75rem;
+        margin-bottom: 0.5rem;
+        border-radius: 4px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        animation: slideIn 0.3s ease;
+    }
+
+    .message.success { border-left-color: #28a745; }
+    .message.error { border-left-color: #dc3545; }
+    .message.info { border-left-color: #17a2b8; }
+
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+
+    .timestamp {
+        font-size: 0.8rem;
+        color: #6c757d;
+        margin-right: 0.5rem;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 768px) {
+        .game-container {
+            padding: 0.5rem;
+        }
+        
+        .game-header {
+            flex-direction: column;
+            gap: 1rem;
+            text-align: center;
+        }
+        
+        .player-input {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        
+        .boards-container {
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+        
+        .game-info {
+            flex-direction: column;
+            gap: 1rem;
+            text-align: center;
+        }
+        
+        .score-board {
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .messages-container {
+            width: calc(100% - 1rem);
+            left: 0.5rem;
+            right: 0.5rem;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .board {
+            max-width: 300px;
+        }
+        
+        .cell {
+            font-size: 0.6rem;
+        }
+        
+        .ships-to-place {
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .ship-item {
+            width: 100%;
+            max-width: 200px;
+            text-align: center;
+        }
+    }
+</style>
+
+@code {
+    private HubConnection? hubConnection;
+    private Game? currentGame;
+    private string playerName = "";
+    private bool isSearching = false;
+    private ShipToPlace? selectedShip;
+    private bool isVerticalPlacement = false;
+    private List<ShipToPlace> shipsToPlace = new();
+    private List<GameMessage> gameMessages = new();
+    private GameStats gameStats = new();
+    private PlayerStats myStats = new();
+
+    // Game state tracking
+    private CellState[,] playerBoard = new CellState[10, 10];
+    private CellState[,] enemyBoard = new CellState[10, 10];
+
+    public bool IsConnected =>
+        hubConnection?.State == HubConnectionState.Connected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        InitializeBoards();
+        InitializeShips();
+        await LoadGameStats(); // AJAX call on initialization
+        
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl("/gamehub")
+            .Build();
+
+        // SignalR event handlers (WebSocket communication)
+        hubConnection.On<Game>("GameFound", async (game) =>
+        {
+            currentGame = game;
+            isSearching = false;
+            AddMessage($"Game found! Playing against {GetOpponentName()}", "success");
+            await InvokeAsync(StateHasChanged);
+        });
+
+        hubConnection.On("WaitingForOpponent", async () =>
+        {
+            AddMessage("Searching for opponent...", "info");
+            await InvokeAsync(StateHasChanged);
+        });
+
+        hubConnection.On<ShotResult>("ShotResult", async (result) =>
+        {
+            await ProcessShotResult(result);
+        });
+
+        hubConnection.On<string, string>("PlayerDisconnected", async (playerId, reason) =>
+        {
+            AddMessage($"Opponent disconnected: {reason}", "error");
+            await InvokeAsync(StateHasChanged);
+        });
+
+        await hubConnection.StartAsync();
+        
+        // Auto-refresh stats every 30 seconds using AJAX
+        _ = Task.Run(async () =>
+        {
+            while (!IsDisposed)
+            {
+                await Task.Delay(30000);
+                await LoadGameStats();
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+    }
+
+    // AJAX Methods
+    private async Task LoadGameStats()
+    {
+        try
+        {
+            var response = await Http.GetAsync("/api/game/stats");
+            if (response.IsSuccessStatusCode)
+            {
+                gameStats = await response.Content.ReadFromJsonAsync<GameStats>() ?? new GameStats();
+            }
+        }
+        catch (Exception ex)
+        {
+            AddMessage($"Failed to load statistics: {ex.Message}", "error");
+        }
+    }
+
+    private async Task RefreshStats()
+    {
+        await LoadGameStats();
+        AddMessage("Statistics refreshed", "success");
+    }
+
+    // Game Logic Methods
+    private async Task JoinMatchmaking()
+    {
+        if (string.IsNullOrWhiteSpace(playerName) || !IsConnected)
+            return;
+
+        isSearching = true;
+        AddMessage("Joining matchmaking...", "info");
+        
+        if (hubConnection != null)
+        {
+            await hubConnection.SendAsync("JoinMatchmaking", playerName);
+        }
+    }
+
+    private async Task HandleEnemyBoardClick(int row, int col)
+    {
+        if (currentGame?.State != GameState.Playing || !IsMyTurn())
+            return;
+
+        if (enemyBoard[row, col] != CellState.Water)
+            return; // Already targeted
+
+        if (hubConnection != null)
+        {
+            await hubConnection.SendAsync("FireShot", row, col);
+        }
+    }
+
+    private async Task HandlePlayerBoardClick(int row, int col)
+    {
+        if (currentGame?.State != GameState.PlacingShips || selectedShip == null)
+            return;
+
+        if (CanPlaceShip(row, col, selectedShip.Size, isVerticalPlacement))
+        {
+            PlaceShip(row, col, selectedShip, isVerticalPlacement);
+            selectedShip.IsPlaced = true;
+            selectedShip = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        else
+        {
+            AddMessage("Cannot place ship here!", "error");
+        }
+    }
+
+    private async Task ProcessShotResult(ShotResult result)
+    {
+        if (result.ShooterConnectionId == GetMyConnectionId())
+        {
+            // My shot result
+            enemyBoard[result.X, result.Y] = result.IsHit ? CellState.Hit : CellState.Miss;
+            myStats.ShotsFired++;
+            
+            if (result.IsHit)
+            {
+                myStats.ShotsHit++;
+                AddMessage($"Hit at ({result.X}, {result.Y})!", "success");
+                
+                if (result.IsShipSunk)
+                {
+                    myStats.ShipsSunk++;
+                    AddMessage($"You sunk the {result.SunkShipName}!", "success");
+                }
+                
+                if (result.IsGameOver)
+                {
+                    AddMessage("You won the game!", "success");
+                    currentGame!.State = GameState.GameOver;
+                }
+            }
+            else
+            {
+                AddMessage($"Miss at ({result.X}, {result.Y})", "info");
+            }
+        }
+        else
+        {
+            // Opponent's shot
+            playerBoard[result.X, result.Y] = result.IsHit ? CellState.Hit : CellState.Miss;
+            
+            if (result.IsHit)
+            {
+                AddMessage($"Enemy hit your ship at ({result.X}, {result.Y})!", "error");
+                
+                if (result.IsShipSunk)
+                {
+                    AddMessage($"Enemy sunk your {result.SunkShipName}!", "error");
+                }
+                
+                if (result.IsGameOver)
+                {
+                    AddMessage("Game Over - You lost!", "error");
+                    currentGame!.State = GameState.GameOver;
+                }
+            }
+            else
+            {
+                AddMessage($"Enemy missed at ({result.X}, {result.Y})", "info");
+            }
+        }
+        
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ConfirmShipPlacement()
+    {
+        if (hubConnection != null && currentGame != null)
+        {
+            var ships = shipsToPlace.Where(s => s.IsPlaced).Select(s => new Ship
+            {
+                Id = s.Id,
+                Name = s.Name,
+                Size = s.Size,
+                Positions = s.Positions
+            }).ToList();
+
+            await hubConnection.SendAsync("PlaceShips", ships);
+            AddMessage("Ships placed! Waiting for opponent...", "info");
+        }
+    }
+
+    // Helper Methods
+    private void InitializeBoards()
+    {
+        for (int i = 0; i < 10; i++)
+        {
+            for (int j = 0; j < 10; j++)
+            {
+                playerBoard[i, j] = CellState.Water;
+                enemyBoard[i, j] = CellState.Water;
+            }
+        }
+    }
+
+    private void InitializeShips()
+    {
+        shipsToPlace = new List<ShipToPlace>
+        {
+            new() { Id = 1, Name = "Carrier", Size = 5 },
+            new() { Id = 2, Name = "Battleship", Size = 4 },
+            new() { Id = 3, Name = "Cruiser", Size = 3 },
+            new() { Id = 4, Name = "Submarine", Size = 3 },
+            new() { Id = 5, Name = "Destroyer", Size = 2 }
+        };
+    }
+
+    private void SelectShip(ShipToPlace ship)
+    {
+        selectedShip = ship;
+        AddMessage($"Selected {ship.Name} - click on your board to place", "info");
+    }
+
+    private void ToggleShipOrientation()
+    {
+        isVerticalPlacement = !isVerticalPlacement;
+        AddMessage($"Ship orientation: {(isVerticalPlacement ? "Vertical" : "Horizontal")}", "info");
+    }
+
+    private bool CanPlaceShip(int startRow, int startCol, int size, bool vertical)
+    {
+        if (vertical)
+        {
+            if (startRow + size > 10) return false;
+            for (int i = 0; i < size; i++)
+            {
+                if (playerBoard[startRow + i, startCol] != CellState.Water)
+                    return false;
+            }
+        }
+        else
+        {
+            if (startCol + size > 10) return false;
+            for (int i = 0; i < size; i++)
+            {
+                if (playerBoard[startRow, startCol + i] != CellState.Water)
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private void PlaceShip(int startRow, int startCol, ShipToPlace ship, bool vertical)
+    {
+        ship.Positions.Clear();
+        
+        if (vertical)
+        {
+            for (int i = 0; i < ship.Size; i++)
+            {
+                playerBoard[startRow + i, startCol] = CellState.Ship;
+                ship.Positions.Add((startRow + i, startCol));
+            }
+        }
+        else
+        {
+            for (int i = 0; i < ship.Size; i++)
+            {
+                playerBoard[startRow, startCol + i] = CellState.Ship;
+                ship.Positions.Add((startRow, startCol + i));
+            }
+        }
+    }
+
+    private CellState GetPlayerCellState(int row, int col)
+    {
+        return playerBoard[row, col];
+    }
+
+    private CellState GetEnemyCellState(int row, int col)
+    {
+        return enemyBoard[row, col];
+    }
+
+    private string GetCellClass(CellState state, bool isPlayerBoard)
+    {
+        var baseClass = "cell";
+        
+        return state switch
+        {
+            CellState.Water => $"{baseClass} water",
+            CellState.Ship => $"{baseClass} {(isPlayerBoard ? "ship" : "water")}", // Hide enemy ships
+            CellState.Hit => $"{baseClass} hit",
+            CellState.Miss => $"{baseClass} miss",
+            CellState.Sunk => $"{baseClass} sunk",
+            _ => baseClass
+        };
+    }
+
+    private string GetCellContent(CellState state, bool isPlayerBoard)
+    {
+        return state switch
+        {
+            CellState.Hit => "💥",
+            CellState.Miss => "💧",
+            CellState.Sunk => "💀",
+            CellState.Ship when isPlayerBoard => "🚢",
+            _ => ""
+        };
+    }
+
+    private void AddMessage(string content, string type = "info")
+    {
+        gameMessages.Add(new GameMessage
+        {
+            Content = content,
+            Type = type,
+            Timestamp = DateTime.Now
+        });
+
+        // Keep only last 50 messages
+        if (gameMessages.Count > 50)
+        {
+            gameMessages.RemoveAt(0);
+        }
+    }
+
+    private string GetCurrentPlayerName()
+    {
+        if (currentGame?.CurrentPlayerTurn == GetMyConnectionId())
+            return "Your Turn";
+        return GetOpponentName() + "'s Turn";
+    }
+
+    private string GetOpponentName()
+    {
+        if (currentGame?.Player1?.ConnectionId == GetMyConnectionId())
+            return currentGame.Player2?.Name ?? "Opponent";
+        return currentGame?.Player1?.Name ?? "Opponent";
+    }
+
+    private string GetMyConnectionId()
+    {
+        return hubConnection?.ConnectionId ?? "";
+    }
+
+    private bool IsMyTurn()
+    {
+        return currentGame?.CurrentPlayerTurn == GetMyConnectionId();
+    }
+
+    private bool IsDisposed { get; set; }
+
+    public async ValueTask DisposeAsync()
+    {
+        IsDisposed = true;
+        
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+
+    // Data Models for the component
+    public class ShipToPlace
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public int Size { get; set; }
+        public bool IsPlaced { get; set; }
+        public List<(int X, int Y)> Positions { get; set; } = new();
+    }
+
+    public class GameMessage
+    {
+        public string Content { get; set; } = "";
+        public string Type { get; set; } = "";
+        public DateTime Timestamp { get; set; }
+    }
+
+    public class GameStats
+    {
+        public int ActiveGames { get; set; }
+        public int PlayersOnline { get; set; }
+        public int GamesToday { get; set; }
+    }
+
+    public class PlayerStats
+    {
+        public int ShotsFired { get; set; }
+        public int ShotsHit { get; set; }
+        public int ShipsSunk { get; set; }
+    }
+}

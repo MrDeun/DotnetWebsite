@@ -1,79 +1,45 @@
-using Microsoft.EntityFrameworkCore;
-using TodoApi.Models;
+using BattleshipsGame.Hubs;
+using BattleshipsGame.Services;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDbContext<TodoContext>(opt => opt.UseInMemoryDatabase("TodoList"));
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddOpenApiDocument(config =>
-{
-    config.DocumentName = "TodoAPI";
-    config.Title = "TodoAPI v1";
-    config.Version = "v1";
-});
+// Add services
+builder.Services.AddRazorPages();
+builder.Services.AddServerSideBlazor();
+builder.Services.AddControllers(); // For API controllers (AJAX endpoints)
+builder.Services.AddSignalR(); // WebSocket communication
+
+// Register custom services
+builder.Services.AddSingleton<GameService>();
+builder.Services.AddSingleton<GameMatchmakingService>();
+builder.Services.AddSingleton<ThreadPoolGameProcessor>();
+builder.Services.AddSingleton<BarrierSynchronizationService>();
+
+// Add HttpClient for AJAX calls
+builder.Services.AddHttpClient();
+
+// Add logging
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 var app = builder.Build();
-if (app.Environment.IsDevelopment())
+
+// Configure pipeline
+if (!app.Environment.IsDevelopment())
 {
-    app.UseOpenApi();
-    app.UseSwaggerUi(config =>
-    {
-        config.DocumentTitle = "TodoAPI";
-        config.Path = "/swagger";
-        config.DocumentPath = "/swagger/{documentName}/swagger.json";
-        config.DocExpansion = "list";
-    });
+    app.UseExceptionHandler("/Error");
+    app.UseHsts();
 }
 
-app.MapGet("/todoitems", async (TodoContext db) =>
-    await db.TodoItems.ToListAsync());
-
-app.MapGet("/todoitems/complete", async (TodoContext db) =>
-    await db.TodoItems.Where(t => t.IsComplete).ToListAsync());
-
-app.MapGet("/todoitems/{id}", async (int id, TodoContext db) =>
-    await db.TodoItems.FindAsync(id)
-        is TodoItem todo
-            ? Results.Ok(todo)
-            : Results.NotFound());
-
-app.MapPost("/todoitems", async (TodoItem todo, TodoContext db) =>
-{
-    db.TodoItems.Add(todo);
-    await db.SaveChangesAsync();
-
-    return Results.Created($"/todoitems/{todo.Id}", todo);
-});
-
-app.MapPut("/todoitems/{id}", async (int id, TodoItem inputTodo, TodoContext db) =>
-{
-    var todo = await db.TodoItems.FindAsync(id);
-
-    if (todo is null) return Results.NotFound();
-
-    todo.Name = inputTodo.Name;
-    todo.IsComplete = inputTodo.IsComplete;
-
-    await db.SaveChangesAsync();
-
-    return Results.NoContent();
-});
-
-app.MapDelete("/todoitems/{id}", async (int id, TodoContext db) =>
-{
-    if (await db.TodoItems.FindAsync(id) is TodoItem todo)
-    {
-        db.TodoItems.Remove(todo);
-        await db.SaveChangesAsync();
-        return Results.NoContent();
-    }
-
-    return Results.NotFound();
-});
-
-
-app.UseDefaultFiles();
+app.UseHttpsRedirection();
 app.UseStaticFiles();
+app.UseRouting();
 
-
+// Map endpoints
+app.MapRazorPages();
+app.MapBlazorHub();
+app.MapControllers(); // API endpoints for AJAX
+app.MapHub<GameHub>("/gamehub"); // WebSocket hub
+// app.MapFallbackToPage("/_Host");
 
 app.Run();
