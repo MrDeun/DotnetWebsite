@@ -1,0 +1,171 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@using EcosystemSimulation.Models
+@implements IAsyncDisposable
+@inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
+@rendermode InteractiveServer
+
+<PageTitle>Wolf & Hare Ecosystem</PageTitle>
+
+<div class="container">
+    <div class="simulation-container">
+        <div class="header">
+            <h1>🐺 Wolf & Hare Ecosystem Simulation 🐰</h1>
+            <p>Watch the predator-prey dynamics unfold in real-time!</p>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stat-card">
+                <h3>🐰 Hares</h3>
+                <h2 style="color: #8BC34A;">@hareCount</h2>
+            </div>
+            <div class="stat-card">
+                <h3>🐺 Wolves</h3>
+                <h2 style="color: #F44336;">@wolfCount</h2>
+            </div>
+            <div class="stat-card">
+                <h3>⏱️ Cycle</h3>
+                <h2 style="color: #2196F3;">@cycle</h2>
+            </div>
+            <div class="stat-card">
+                <h3>📊 Status</h3>
+                <h2 style="color: @(isConnected ? "#4CAF50" : "#F44336");">
+                    @(isConnected ? "Connected" : "Disconnected")
+                </h2>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="simulationCanvas" width="800" height="600"></canvas>
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #8BC34A;"></div>
+                    <span>Hares</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background-color: #F44336;"></div>
+                    <span>Wolves</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private HubConnection? hubConnection;
+    private int hareCount = 0;
+    private int wolfCount = 0;
+    private int cycle = 0;
+    private bool isConnected = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(Navigation.ToAbsoluteUri("/simulationhub"))
+            .Build();
+
+        hubConnection.On<SimulationState>("SimulationUpdate", async (state) =>
+        {
+            hareCount = state.HareCount;
+            wolfCount = state.WolfCount;
+            cycle = state.Cycle;
+
+            await InvokeAsync(StateHasChanged);
+            await DrawSimulation(state);
+        });
+
+        await hubConnection.StartAsync();
+        isConnected = hubConnection.State == HubConnectionState.Connected;
+    }
+
+    private async Task DrawSimulation(SimulationState state)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("drawSimulation", state.Hares, state.Wolves);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error drawing simulation: {ex.Message}");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+}
+
+<script>
+    window.drawSimulation = (hares, wolves) => {
+        const canvas = document.getElementById('simulationCanvas');
+        if (!canvas) return;
+        
+        const ctx = canvas.getContext('2d');
+        
+        // Clear canvas with grass background
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+        gradient.addColorStop(0, '#4CAF50');
+        gradient.addColorStop(1, '#2E7D32');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Add grass texture
+        ctx.fillStyle = 'rgba(139, 195, 74, 0.3)';
+        for (let i = 0; i < 50; i++) {
+            const x = Math.random() * canvas.width;
+            const y = Math.random() * canvas.height;
+            ctx.fillRect(x, y, 2, 8);
+        }
+
+        // Draw hares
+        hares.forEach(hare => {
+            if (hare.isAlive) {
+                ctx.fillStyle = '#8BC34A';
+                ctx.strokeStyle = '#689F38';
+                ctx.lineWidth = 2;
+                
+                ctx.beginPath();
+                ctx.arc(hare.x, hare.y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+                
+                // Add ears
+                ctx.fillStyle = '#689F38';
+                ctx.beginPath();
+                ctx.ellipse(hare.x - 2, hare.y - 4, 1, 3, -0.3, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.ellipse(hare.x + 2, hare.y - 4, 1, 3, 0.3, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        });
+
+        // Draw wolves
+        wolves.forEach(wolf => {
+            if (wolf.isAlive) {
+                ctx.fillStyle = '#F44336';
+                ctx.strokeStyle = '#C62828';
+                ctx.lineWidth = 2;
+                
+                ctx.beginPath();
+                ctx.arc(wolf.x, wolf.y, 6, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.stroke();
+                
+                // Add eyes
+                ctx.fillStyle = '#FFEB3B';
+                ctx.beginPath();
+                ctx.arc(wolf.x - 2, wolf.y - 1, 1, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(wolf.x + 2, wolf.y - 1, 1, 0, 2 * Math.PI);
+                ctx.fill();
+            }
+        });
+    };
+</script>

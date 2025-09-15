@@ -1,45 +1,35 @@
-using BattleshipsGame.Hubs;
-using BattleshipsGame.Services;
+using EcosystemSimulation.Hubs;
+using EcosystemSimulation.Services;
+using EcosystemSimulation.Components;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services
-builder.Services.AddRazorPages();
-builder.Services.AddServerSideBlazor();
-builder.Services.AddControllers(); // For API controllers (AJAX endpoints)
-builder.Services.AddSignalR(); // WebSocket communication
+// Add services to the container
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
 
-// Register custom services
-builder.Services.AddSingleton<GameService>();
-builder.Services.AddSingleton<GameMatchmakingService>();
-builder.Services.AddSingleton<ThreadPoolGameProcessor>();
-builder.Services.AddSingleton<BarrierSynchronizationService>();
-
-// Add HttpClient for AJAX calls
-builder.Services.AddHttpClient();
-
-// Add logging
-builder.Logging.AddConsole();
-builder.Logging.AddDebug();
+builder.Services.AddSignalR();
+builder.Services.AddHostedService<SimulationService>();
 
 var app = builder.Build();
 
-// Configure pipeline
+// Configure the HTTP request pipeline
 if (!app.Environment.IsDevelopment())
 {
-    app.UseExceptionHandler("/Error");
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
     app.UseHsts();
 }
 
 app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
+app.UseAntiforgery();
 
-// Map endpoints
-app.MapRazorPages();
-app.MapBlazorHub();
-app.MapControllers(); // API endpoints for AJAX
-app.MapHub<GameHub>("/gamehub"); // WebSocket hub
-// app.MapFallbackToPage("/_Host");
+app.UseRouting();
+
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
+
+app.MapHub<SimulationHub>("/simulationhub");
 
 app.Run();
