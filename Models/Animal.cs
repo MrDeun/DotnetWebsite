@@ -1,146 +1,165 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 
-namespace EcosystemSimulation.Models
+namespace EcosystemSimulation
 {
     public abstract class Animal
     {
-        public int Id { get; set; }
-        public double X { get; set; }
-        public double Y { get; set; }
-        protected int _energy;
-        public int Energy { get => _energy; set => _energy = value; }
-        protected int _age;
-        public int Age { get => _age; set => _age = value; }
+        public int Id;
+        public double X { get; protected set; }
+        public double Y { get; protected set; }
+        public double VelocityX { get; protected set; }
+        public double VelocityY { get; protected set; }
         public bool IsAlive { get; set; } = true;
 
-        // Thread-local random for thread safety
+        // Thread-local random
         private static readonly ThreadLocal<Random> ThreadLocalRandom =
             new ThreadLocal<Random>(() => new Random(Guid.NewGuid().GetHashCode()));
 
         protected Random Random => ThreadLocalRandom.Value;
 
-        public abstract void Move(int worldWidth, int worldHeight);
-        public abstract void Update();
-        public abstract bool CanReproduce();
+        protected Animal(double x, double y)
+        {
+            X = x;
+            Y = y;
+        }
+
+        public abstract void Move(int worldWidth, int worldHeight, List<Animal> others);
+
+        protected void ApplyVelocity(double maxSpeed)
+        {
+            double speed = Math.Sqrt(VelocityX * VelocityX + VelocityY * VelocityY);
+            if (speed > maxSpeed)
+            {
+                VelocityX = (VelocityX / speed) * maxSpeed;
+                VelocityY = (VelocityY / speed) * maxSpeed;
+            }
+
+            X += VelocityX;
+            Y += VelocityY;
+        }
+
+        protected void ContainWithinBounds(int width, int height)
+        {
+            if (X < 0 || X > width)
+            {
+                VelocityX *= -0.8;
+                X = Math.Clamp(X, 0, width);
+            }
+            if (Y < 0 || Y > height)
+            {
+                VelocityY *= -0.8;
+                Y = Math.Clamp(Y, 0, height);
+            }
+        }
     }
 
     public class Hare : Animal
     {
-        public const int MaxEnergy = 100;
-        public const int ReproductionThreshold = 60;
-        public const int MaxAge = 50;
+        public const double MaxSpeed = 2.0;
+        public const double FleeDistance = 100;
 
-        public Hare(double x, double y)
+        public Hare(double x, double y) : base(x, y) { }
+
+        public override void Move(int worldWidth, int worldHeight, List<Animal> others)
         {
-            X = x;
-            Y = y;
-            Energy = 50;
-            Age = 0;
-        }
+            var wolves = others.OfType<Wolf>().Where(w => w.IsAlive).ToList();
+            double fx = 0, fy = 0;
 
-        public override void Move(int worldWidth, int worldHeight)
-        {
-            // Use thread-safe random
-            X += (Random.NextDouble() - 0.5) * 10;
-            Y += (Random.NextDouble() - 0.5) * 10;
-
-            X = Math.Max(0, Math.Min(worldWidth, X));
-            Y = Math.Max(0, Math.Min(worldHeight, Y));
-
-            Interlocked.Decrement(ref _energy); // Thread-safe energy decrease
-        }
-
-        public override void Update()
-        {
-            Interlocked.Increment(ref _age); // Thread-safe age increment
-
-            if (Random.NextDouble() < 0.3)
+            foreach (var wolf in wolves)
             {
-                // Thread-safe energy increase with bounds checking
-                int currentEnergy, newEnergy;
-                do
+                double dx = X - wolf.X;
+                double dy = Y - wolf.Y;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+
+                if (dist < FleeDistance && dist > 0)
                 {
-                    currentEnergy = Energy;
-                    newEnergy = Math.Min(MaxEnergy, currentEnergy + 15);
-                } while (Interlocked.CompareExchange(ref _energy, newEnergy, currentEnergy) != currentEnergy);
+                    fx += (dx / dist) * (1.0 / dist); // stronger when closer
+                    fy += (dy / dist) * (1.0 / dist);
+                }
             }
 
-            if (Age > MaxAge || Energy <= 0)
+            if (fx == 0 && fy == 0)
             {
-                IsAlive = false;
+                // wander slightly
+                fx = (Random.NextDouble() - 0.5) * 0.1;
+                fy = (Random.NextDouble() - 0.5) * 0.1;
             }
-        }
 
-        public override bool CanReproduce()
-        {
-            return Energy > ReproductionThreshold && Age > 5;
+            VelocityX = VelocityX * 0.9 + fx;
+            VelocityY = VelocityY * 0.9 + fy;
+
+            ApplyVelocity(MaxSpeed);
+            ContainWithinBounds(worldWidth, worldHeight);
         }
     }
 
     public class Wolf : Animal
     {
-        public const int MaxEnergy = 150;
-        public const int ReproductionThreshold = 100;
-        public const int MaxAge = 80;
-        public const double HuntRange = 20;
+        public const double MaxSpeed = 1.5;
+        public const double HuntRange = 15;
+        public const double ChaseDistance = 150;
 
-        public Wolf(double x, double y)
+        public Wolf(double x, double y) : base(x, y) { }
+
+        public override void Move(int worldWidth, int worldHeight, List<Animal> others)
         {
-            X = x;
-            Y = y;
-            Energy = 75;
-            Age = 0;
-        }
+            var hares = others.OfType<Hare>().Where(h => h.IsAlive).ToList();
+            Hare target = null;
+            double closest = double.MaxValue;
+            double fx = 0, fy = 0;
 
-        public override void Move(int worldWidth, int worldHeight)
-        {
-            // Use thread-safe random
-            X += (Random.NextDouble() - 0.5) * 15;
-            Y += (Random.NextDouble() - 0.5) * 15;
-
-            X = Math.Max(0, Math.Min(worldWidth, X));
-            Y = Math.Max(0, Math.Min(worldHeight, Y));
-
-            // Thread-safe energy decrease
-            Interlocked.Add(ref _energy, -2);
-        }
-
-        public override void Update()
-        {
-            Interlocked.Increment(ref _age); // Thread-safe age increment
-            Interlocked.Decrement(ref _energy); // Thread-safe energy decrease
-
-            if (Age > MaxAge || Energy <= 0)
+            foreach (var hare in hares)
             {
-                IsAlive = false;
-            }
-        }
+                double dx = hare.X - X;
+                double dy = hare.Y - Y;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
 
-        public override bool CanReproduce()
-        {
-            return Energy > ReproductionThreshold && Age > 10;
-        }
-
-        public bool CanHunt(Hare hare)
-        {
-            var distance = Math.Sqrt(Math.Pow(X - hare.X, 2) + Math.Pow(Y - hare.Y, 2));
-            return distance <= HuntRange;
-        }
-
-        public void Hunt(Hare hare)
-        {
-            if (CanHunt(hare) && Random.NextDouble() < 0.7) // 70% success rate
-            {
-                // Thread-safe energy increase with bounds checking
-                int currentEnergy, newEnergy;
-                do
+                if (dist < ChaseDistance && dist < closest)
                 {
-                    currentEnergy = Energy;
-                    newEnergy = Math.Min(MaxEnergy, currentEnergy + 40);
-                } while (Interlocked.CompareExchange(ref _energy, newEnergy, currentEnergy) != currentEnergy);
-
-                hare.IsAlive = false;
+                    closest = dist;
+                    target = hare;
+                }
             }
+
+            if (target != null)
+            {
+                double dx = target.X - X;
+                double dy = target.Y - Y;
+                double dist = Math.Sqrt(dx * dx + dy * dy);
+
+                if (dist > 0)
+                {
+                    double strength = Math.Min(0.05, 1.0 / dist);
+                    fx = (dx / dist) * strength;
+                    fy = (dy / dist) * strength;
+                }
+
+                if (dist <= HuntRange)
+                {
+                    // 🔒 Synchronize kill attempt
+                    lock (target)
+                    {
+                        if (target.IsAlive)
+                        {
+                            target.IsAlive = false;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                fx = (Random.NextDouble() - 0.5) * 0.05;
+                fy = (Random.NextDouble() - 0.5) * 0.05;
+            }
+
+            VelocityX = VelocityX * 0.9 + fx;
+            VelocityY = VelocityY * 0.9 + fy;
+
+            ApplyVelocity(MaxSpeed);
+            ContainWithinBounds(worldWidth, worldHeight);
         }
     }
 }
