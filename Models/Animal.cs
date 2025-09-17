@@ -58,7 +58,7 @@ namespace EcosystemSimulation
 
     public class Hare : Animal
     {
-        public const double MaxSpeed = 2.0;
+        public const double MaxSpeed = 4.0;
         public const double FleeDistance = 100;
 
         public Hare(double x, double y) : base(x, y) { }
@@ -84,8 +84,8 @@ namespace EcosystemSimulation
             if (fx == 0 && fy == 0)
             {
                 // wander slightly
-                fx = (Random.NextDouble() - 0.5) * 0.1;
-                fy = (Random.NextDouble() - 0.5) * 0.1;
+                fx = (Random.NextDouble() - 0.5) * 1.0;
+                fy = (Random.NextDouble() - 0.5) * 1.0;
             }
 
             VelocityX = VelocityX * 0.9 + fx;
@@ -98,7 +98,7 @@ namespace EcosystemSimulation
 
     public class Wolf : Animal
     {
-        public const double MaxSpeed = 1.5;
+        public const double MaxSpeed = 3.0;
         public const double HuntRange = 15;
         public const double ChaseDistance = 150;
 
@@ -151,8 +151,8 @@ namespace EcosystemSimulation
             }
             else
             {
-                fx = (Random.NextDouble() - 0.5) * 0.05;
-                fy = (Random.NextDouble() - 0.5) * 0.05;
+                fx = (Random.NextDouble() - 0.5) * 0.5;
+                fy = (Random.NextDouble() - 0.5) * 0.5;
             }
 
             VelocityX = VelocityX * 0.9 + fx;

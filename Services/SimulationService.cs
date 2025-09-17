@@ -80,7 +80,7 @@ namespace EcosystemSimulation.Services
             _stateMutex.WaitOne();
             try
             {
-                for (int i = 0; i < 20; i++)
+                for (int i = 0; i < 100; i++)
                 {
                     var random = _threadLocalRandom.Value;
                     _state.Hares.Add(new Hare(random.NextDouble() * WorldWidth, random.NextDouble() * WorldHeight)
@@ -89,7 +89,7 @@ namespace EcosystemSimulation.Services
                     });
                 }
 
-                for (int i = 0; i < 5; i++)
+                for (int i = 0; i < 10; i++)
                 {
                     var random = _threadLocalRandom.Value;
                     _state.Wolves.Add(new Wolf(random.NextDouble() * WorldWidth, random.NextDouble() * WorldHeight)
