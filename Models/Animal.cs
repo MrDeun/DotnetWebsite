@@ -132,7 +132,7 @@ namespace EcosystemSimulation
 
                 if (dist > 0)
                 {
-                    double strength = Math.Min(0.05, 1.0 / dist);
+                    double strength = Math.Min(0.5, 1.0 / dist);
                     fx = (dx / dist) * strength;
                     fy = (dy / dist) * strength;
                 }

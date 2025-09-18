@@ -114,14 +114,6 @@
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Add grass texture
-        ctx.fillStyle = 'rgba(139, 195, 74, 0.3)';
-        for (let i = 0; i < 50; i++) {
-            const x = Math.random() * canvas.width;
-            const y = Math.random() * canvas.height;
-            ctx.fillRect(x, y, 2, 8);
-        }
-
         // Draw hares
         hares.forEach(hare => {
             if (hare.isAlive) {
